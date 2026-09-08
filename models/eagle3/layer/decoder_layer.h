@@ -43,6 +43,14 @@ struct DecoderLayerParam {
     bool kvQuant = false;
     bool enableIntraLayerAddNorm= false;
     bool enableInterLayerAddNorm= false;
+    // QK norm (per-head RMSNorm on q/k before rope), Qwen3-style draft layers.
+    bool useQKNorm = false;
+    // Fuse QKV split + per-head QK RMSNorm + RoPE into the single
+    // SplitRmsnormRope kernel (Qwen3 target decode path).
+    bool enableSplitRmsNormRope = false;
+    // Eagle3.1: use hidden_norm(hidden_states_extra) as the attention residual
+    // base instead of the raw extra hidden states.
+    bool normBeforeResidual = false;
     std::string backend = "hccl";
     int rank = 0;
     int worldSize = 1;

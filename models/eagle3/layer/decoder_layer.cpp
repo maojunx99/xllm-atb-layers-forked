@@ -59,6 +59,7 @@ std::map<std::string, std::vector<std::string>> GetEagle3LayerInTensorCandidates
             "in_mlp_down_weight", "in_mlp_down_bias", "in_mlp_down_descale", "in_mlp_down_offset",
             "in_mlp_down_scale", "in_mlp_down_compress_idx"}},
         {"eagle3_weight", {"in_hidden_norm_weight", "in_hidden_norm_bias"}},
+        {"qk_norm", {"in_q_norm_weight", "in_k_norm_weight"}},
         {"kv_quant", {
             "in_k_quant_scale", "in_k_dequant_scale", "in_v_quant_scale", "in_v_dequant_scale",
             "in_k_quant_offset", "in_k_dequant_offset", "in_v_quant_offset", "in_v_dequant_offset"}},
@@ -107,6 +108,11 @@ std::map<std::string, uint32_t> ConstructTensorMap(
 
     // translatedEagle3translatedTensor
     atb_speed::common::AddTensorToList(eagle3LayerInTensorCandiadates, "eagle3_weight", inTensorList);
+
+    // translatedQKNormtranslatedTensor
+    if (param.useQKNorm) {
+        atb_speed::common::AddTensorToList(eagle3LayerInTensorCandiadates, "qk_norm", inTensorList);
+    }
 
     // translatedKV cache int8translatedTensor
     if (param.kvQuant) {
@@ -164,6 +170,8 @@ void SetFusionAttentionParamPart(
     fusionAttentionParam.supportLcoc = false;//param.supportLcoc;
     fusionAttentionParam.supportLora = param.supportLora;
     fusionAttentionParam.loraEnableGMM = param.loraEnableGMM;
+    fusionAttentionParam.useQKNorm = param.useQKNorm;
+    fusionAttentionParam.enableSplitRmsNormRope = param.enableSplitRmsNormRope;
     atb::infer::RmsNormParam attenRmsNormParam;
     attenRmsNormParam.layerType = atb::infer::RmsNormParam::RmsNormType::RMS_NORM_NORM;
     attenRmsNormParam.normParam.epsilon = param.rmsNormEps;
@@ -294,6 +302,10 @@ int64_t AddFusionAttention(atb::Node &attentionNode, const DecoderLayerParam &pa
     if (param.enableLogN) {
         attnInTensorNames.push_back("kv_cache_idx");
     }
+    if (param.useQKNorm) {
+        attnInTensorNames.push_back("in_q_norm_weight");
+        attnInTensorNames.push_back("in_k_norm_weight");
+    }
     attentionNode.inTensorIds = atb_speed::common::GetTensorIdxList(tensorMap, attnInTensorNames);
     attentionNode.outTensorIds = atb_speed::common::GetTensorIdxList(tensorMap, {"intermediate_attn_out"});
 
@@ -413,8 +425,13 @@ atb::Status DecoderLayer(const DecoderLayerParam &param, atb::Operation **operat
     atb::infer::ElewiseParam addParam;
     addParam.elewiseType = atb::infer::ElewiseParam::ElewiseType::ELEWISE_ADD;
     CHECK_OPERATION_STATUS_RETURN(atb::CreateOperation(addParam, &selfResidualAddNode.operation));
-    selfResidualAddNode.inTensorIds = \
-        atb_speed::common::GetTensorIdxList(tensorMap, {"in_hidden_states_extra", "intermediate_attn_out"});
+    // Eagle3.1 norm_before_residual: the residual base is the hidden_norm output
+    // instead of the raw extra hidden states.
+    selfResidualAddNode.inTensorIds = atb_speed::common::GetTensorIdxList(
+        tensorMap,
+        param.normBeforeResidual
+            ? std::vector<std::string>{"intermediate_hiddennorm_out", "intermediate_attn_out"}
+            : std::vector<std::string>{"in_hidden_states_extra", "intermediate_attn_out"});
     selfResidualAddNode.outTensorIds = atb_speed::common::GetTensorIdxList(tensorMap, {"in_hidden_states"});
     opGraph.nodes.push_back(selfResidualAddNode);
     CHECK_OPERATION_STATUS_RETURN(AddMlp(mlpParallelNode, param, tensorMap));
